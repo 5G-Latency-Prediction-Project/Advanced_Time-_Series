@@ -17,6 +17,7 @@ def readAndFormatLatency(folderName, multipleSequence = True):
         dataFrame = pd.read_parquet(folderPath + fileName)
         Fs = 1/(dataFrame["packet_interval"][0]*10**(-9)) #Sampling frequency, 1/(sampling period) where sampling period is given in ns
         dataFrame = dataFrame[["timestamps.client.send.wall", "timestamps.server.receive.wall"]]
+        dataFrame.drop(index=dataFrame.index[1:1000], axis=0, inplace=True)#Drop first 1000 measurments to discard transients at start of measurement
         if sequence == 0:
             ds = (dataFrame["timestamps.client.send.wall"] - dataFrame["timestamps.client.send.wall"][0]).apply(pd.Timestamp) #subtract first timestamp to get timestamps relative to time 0 (in ns), convert to pandas timestamp and only keep time (not date)
             nextSequenceStart = ds.iloc[-1] - ds.iloc[0] + pd.Timedelta(10, unit="milliseconds")
@@ -32,10 +33,16 @@ def readAndFormatLatency(folderName, multipleSequence = True):
     return pd.concat(timeseries), Fs #concatenate all sequences into one
 
 def plotTimeseries(timeseries):
-    timeseries["ds"] = timeseries["ds"].dt.strftime("%H:%M")
-    ax = timeseries.set_index("ds").plot(legend= None)
-    ax.set_ylabel("Latency [ms]")
-    ax.set_xlabel("Time (HH:MM)") #from measurement start
+    #timeseries["ds"] = timeseries["ds"].dt.strftime("%H:%M")
+    #ax = timeseries.set_index("ds").plot(legend= None)
+    #ax.set_ylabel("Latency [ms]")
+    #ax.set_xlabel("Time (HH:MM)") #from measurement start
+    #plt.show()
+    plt.plot(timeseries["y"])
+    plt.title('Original Data')
+    plt.xlabel('Index')
+    plt.ylabel('Latency (ms)')
+    plt.grid(True)
     plt.show()
 
 def splitTimeseries(timeseries, partition):
@@ -43,8 +50,19 @@ def splitTimeseries(timeseries, partition):
     timeseries2 = timeseries.iloc[int(len(timeseries)*partition):,:]
     return timeseries1, timeseries2
 
+def subSample(timeseries, windowLength):
+    means = list()
+    N = len(timeseries)
+    windows = N//windowLength
+    windowStartIdx = 0
+    for windowIdx in range(windows):
+        window = timeseries[windowStartIdx:windowStartIdx+windowLength]
+        means.append(window.mean())
+        windowStartIdx += windowLength
+    return np.array(means)
+
 def getModel():
-    with open('serialized_model.json', 'r') as fin:
+    with open('Prophet.json', 'r') as fin:
         model = model_from_json(fin.read())  # Load model
     return model
 
@@ -54,14 +72,21 @@ def saveModel(model, name):
 
 def trainAndEvaluateModel(timeseries):
     trainTimeseries, testTimeseries = splitTimeseries(timeseries, 0.8)
-    model = Prophet(interval_width=0.95) #Larger internal width -> larger allowed variance in estimates. Parameter is prediction interval, for example 95% next data point sampled within the interval (assume gaussian dist)
-    model.fit(trainTimeseries) #takes 15 seconds for one sequence, 5 minutes for 6 sequences
+    #model = Prophet(interval_width=0.95) #Larger internal width -> larger allowed variance in estimates. Parameter is prediction interval, for example 95% next data point sampled within the interval (assume gaussian dist)
+    #model.fit(trainTimeseries) #takes 15 seconds for one sequence, 5 minutes for 6 sequences
+    #saveModel(model, "Prophet")
+    model = getModel()
     yHat = model.predict(testTimeseries)
     testTimeseries.loc[:, "yHat"] = yHat["yhat"].values
     testTimeseries.loc[:, "yHat lower"] = yHat["yhat_lower"].values
     testTimeseries.loc[:, "yHat upper"] = yHat["yhat_upper"].values
     timeseries = pd.concat([trainTimeseries, testTimeseries])
-    print("Test RMSE:", ((testTimeseries.y - yHat.loc[:, "yhat"].values)**2).mean()**.5) #0.34 for one sequence, 0.47 for all sequences
+    print("Test RMSE:", ((testTimeseries.y - yHat.loc[:, "yhat"].values)**2).mean()**.5) 
+    #print("Test MAPE: ", (yHat.loc[:, "yhat"].values-testTimeseries.y/(testTimeseries.y)).abs().sum())
+    yHatnp = yHat.loc[:, "yhat"].to_numpy()
+    ynp = testTimeseries.y.to_numpy()
+    MAPE = np.sum(np.abs((yHatnp-ynp)/ynp))/len(ynp)
+    print("Test MAPE: ", MAPE)
     #timeseries["ds"] = timeseries["ds"].dt.strftime("%H:%M")
     #ax = timeseries.set_index("ds").plot()
     #ax.set_ylabel("Latency [ms]")
@@ -74,7 +99,8 @@ def trainAndEvaluateModel(timeseries):
 
     timeseries["ds"] = timeseries["ds"].dt.strftime("%H:%M:%S.%f")
     testIdx = int(len(timeseries)*0.8)
-    timeseriesSubset = timeseries.iloc[testIdx-200:testIdx+300,:]
+    timeseriesSubset = timeseries.iloc[testIdx:testIdx+200]
+    #timeseriesSubset = timeseries.tail(200)
     ax = timeseriesSubset.set_index("ds").plot()
     ax.set_ylabel("Latency [ms]")
     ax.set_xlabel("Time (HH:MM:SS)") 
@@ -108,13 +134,13 @@ def finetuneAndTrainModel(timeseries):
     print("Best found parameters: ", optimalParams)
     model = Prophet(**optimalParams) 
     model.fit(trainTimeseries)
-    saveModel(model, "reducedOptimalModel")
+    saveModel(model, "OptimalProphet")
 
     
 if __name__ == "__main__":
-    folderNames = ["session1-UL", "session2-UL", "session3-UL", "session4-UL", "session7-UL"] 
-    timeseries, Fs = readAndFormatLatency(folderNames[4])
-    plotTimeseries(timeseries)
-    #trainAndEvaluateModel(timeseries)
+    folderNames = ["session13-UL"] #T = 5.5 ms -> 1 second is about 182 samples
+    timeseries, Fs = readAndFormatLatency(folderNames[0], False)
+    #plotTimeseries(timeseries)
+    trainAndEvaluateModel(timeseries)
     #finetuneAndTrainModel(timeseries)
     
