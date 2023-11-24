@@ -101,6 +101,18 @@ def readLatency(folderName, multipleSequence = True):
             timeseries.append(y.to_numpy())
     return np.concatenate(timeseries), Fs #concatenate all sequences into one
 
+def getData():
+    #returns sampling frequency, scales latency to ms and converts time stamps to a difference from first time stamp that is HH:MM:SS = 00:00:00.
+    #puts the resulting timeseries in a pandas dataframe, to be used by prophet
+    timeseries = list()
+    dataFrame = pd.read_parquet("data.parquet") #Use measurement from session 13 with lowest outlier percentage
+    Fs = 1/(dataFrame["packet_interval"][0]*10**(-9)) #Sampling frequency, 1/(sampling period) where sampling period is given in ns
+    dataFrame = dataFrame[["timestamps.client.send.wall", "timestamps.server.receive.wall"]]
+    y = (dataFrame["timestamps.server.receive.wall"] - dataFrame["timestamps.client.send.wall"])*10**(-9)*10**3 #measured in ns, converted to ms
+    y = y.to_numpy()
+    return y[1000:], Fs #Drop first 1000 samples to remove transients at measurement start
+
+
 def subSample(timeseries, windowLength):
     means = list()
     N = len(timeseries)
@@ -201,7 +213,7 @@ def createAndTrainModel(XTrain, yTrain, XVal, yVal, previousSamples, futureSampl
 
 def DisplayPerformance(model, XTest, yTest):
     if model == None:
-        model = torch.load("LSTM.pth")
+        model = torch.load("6.pth")
     model.eval()
     lossFunction = nn.MSELoss()
     with torch.no_grad():
@@ -209,8 +221,8 @@ def DisplayPerformance(model, XTest, yTest):
         MAPE = torch.sum((yHat-yTest/(yTest)).abs())/(yHat.shape[0]*yHat.shape[2])
         #print("Test RMSE: ", np.sqrt(lossFunction(yHat, yTest)).item()) #LSTM 2.209141492843628 (1.76 for one sample), GRU 2.2371926307678223 (Also much more computationally expensive)
         print("Test MAPE all prediction: ", MAPE.item())
-    plt.plot(yTest[:, : , 0].reshape(-1)[:200], label= "y")
-    plt.plot(yHat[:, : , 0].reshape(-1)[:200], label = "yHat")
+    plt.plot(yTest[:, : , 0].reshape(-1), label= "measured latency") #[:200]
+    plt.plot(yHat[:, : , 0].reshape(-1), label = "predicted latency") #[:200]
     plt.xlabel('Test sample')
     plt.ylabel('Latency [ms]')
     plt.legend()
@@ -219,7 +231,8 @@ def DisplayPerformance(model, XTest, yTest):
 
 if __name__ == "__main__":
     folderNames = ["session13-UL"] #T = 5.5 ms -> 1 second is about 182 samples
-    timeseries, Fs = readLatency(folderNames[0], False)
+    #timeseries, Fs = readLatency(folderNames[0], False)
+    timeseries, Fs = getData()
     #timeseries = subSample(timeseries, 182) #each sample now is average latency for a second of measurements
     #plotTimeseries(timeseries)
     #timeseries = readCSV("denoised.csv")
@@ -229,6 +242,6 @@ if __name__ == "__main__":
     XTrain, yTrain = createDataset(trainTimeseries, previousSamples, futureSamples)
     XVal, yVal = createDataset(validationTimeseries, previousSamples, futureSamples)
     XTest, yTest = createDataset(testTimeseries, previousSamples, futureSamples)
-    model = createAndTrainModel(XTrain, yTrain, XVal, yVal, previousSamples, futureSamples)
+    #model = createAndTrainModel(XTrain, yTrain, XVal, yVal, previousSamples, futureSamples)
     DisplayPerformance(None, XTest, yTest)
     
