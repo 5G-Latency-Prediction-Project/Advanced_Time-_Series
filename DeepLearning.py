@@ -215,14 +215,18 @@ def DisplayPerformance(model, XTest, yTest):
     if model == None:
         model = torch.load("6.pth")
     model.eval()
-    lossFunction = nn.MSELoss()
     with torch.no_grad():
         yHat = model(XTest)
-        MAPE = torch.sum((yHat-yTest/(yTest)).abs())/(yHat.shape[0]*yHat.shape[2])
-        #print("Test RMSE: ", np.sqrt(lossFunction(yHat, yTest)).item()) #LSTM 2.209141492843628 (1.76 for one sample), GRU 2.2371926307678223 (Also much more computationally expensive)
-        print("Test MAPE all prediction: ", MAPE.item())
-    plt.plot(yTest[:, : , 0].reshape(-1), label= "measured latency") #[:200]
-    plt.plot(yHat[:, : , 0].reshape(-1), label = "predicted latency") #[:200]
+        yHatNP = torch.flatten(yHat).detach().cpu().numpy()
+        yTestNP = torch.flatten(yTest).detach().cpu().numpy()
+        MAPE = np.sum(np.abs((yHatNP-yTestNP)/yTestNP))/len(yTestNP)
+        print("Test MAPE: ", 100*MAPE, "%")
+        yHatNNP = torch.flatten(yHat[:, :, -1]).detach().cpu().numpy()
+        yTestNNP = torch.flatten(yTest[:, :, -1]).detach().cpu().numpy()
+        MAPEN = np.sum(np.abs((yHatNNP-yTestNNP)/yTestNNP))/len(yTestNNP)
+        print("Test MAPE N-th future sample: ", 100*MAPEN, "%")
+    plt.plot(yTest[:, : , 0].reshape(-1)[:200], label= "measured latency") #[:200]
+    plt.plot(yHat[:, : , 0].reshape(-1)[:200], label = "predicted latency") #[:200]
     plt.xlabel('Test sample')
     plt.ylabel('Latency [ms]')
     plt.legend()
